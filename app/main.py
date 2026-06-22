@@ -1,7 +1,20 @@
-from fastapi import FastAPI
-import app.models  
-from app.api import auth, task, evidence, report, notification
+from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from datetime import datetime
+
+# Import DB Engine Dependency
+from app.core.database import get_db
+
+# Import trọn vẹn 17 bảng Models quy chuẩn V2 phục vụ tính toán thi đua
+from app.models.main_models import (
+    UserModel, RoleModel, DepartmentModel, TaskModel, 
+    KpiRuleModel, KpiEventModel, AuditLogModel
+)
+
+# Import các APIRouter từ thư mục chức năng vệ tinh của V2
+from app.api import auth, task, evidence, report, notification
 
 # 🏫 Khởi tạo máy chủ kết toán thi đua Trường TH Thạnh Xuân
 app = FastAPI(
@@ -15,7 +28,7 @@ app = FastAPI(
 # ==============================================================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 🌟 Cho phép cả trình duyệt PC và mạng mạng di động kết nối
+    allow_origins=["*"],  # 🌟 Cho phép cả trình duyệt PC và mạng di động kết nối
     allow_credentials=True,
     allow_methods=["*"],  # Cho phép đầy đủ các phương thức POST, GET, PUT, DELETE
     allow_headers=["*"],  # Cho phép truyền Header chứa mã Token bảo mật JWT
@@ -24,12 +37,16 @@ app.add_middleware(
 # ==============================================================================
 # 🔀 ĐĂNG KÝ CÁC TUYẾN ĐƯỜNG DẪN ĐỊNH TUYẾN HỆ THỐNG (ROUTING)
 # ==============================================================================
-# 🔐 Đường dẫn gốc đăng nhập sẽ là: /auth/login/ (Thầy lưu ý để cấu hình vào Flutter)
+# 🔐 Các đầu cổng Router đã được đồng bộ chuẩn hóa theo mô hình Multi-School
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(task.router, prefix="/tasks", tags=["Tasks"])
 app.include_router(evidence.router, prefix="/evidences", tags=["Evidences"])
 app.include_router(report.router, prefix="/reports", tags=["Reports"]) 
 app.include_router(notification.router, prefix="/notifications", tags=["Notifications"])
+
+# ==============================================================================
+# 🎯 CORE APIS KẾT TOÁN THI ĐUA & ĐỒNG BỘ TRẠNG THÁI FLUTTER
+# ==============================================================================
 
 @app.post("/tasks/{task_id}/review/")
 def review_task_and_generate_kpi(task_id: int, reviewer_id: int, actual_score: int, db: Session = Depends(get_db)):
@@ -40,10 +57,11 @@ def review_task_and_generate_kpi(task_id: int, reviewer_id: int, actual_score: i
     now = datetime.now()
     is_late = now > task.deadline
     
-    # ĐỒNG BỘ: Đổi sang từ khóa viết hoa của Flutter
+    # ĐỒNG BỘ: Đổi sang từ khóa viết hoa khớp cấu trúc TaskModel trong Flutter
     task.status = "COMPLETED" if not is_late else "OVERDUE"
     task.final_score = actual_score if not is_late else -task.score_value
     
+    # Ghi nhận sự kiện vào Sổ cái KpiEvent phục vụ biểu đồ động
     rule_code = "T_CM_01" if not is_late else "P_TD_01"
     rule = db.query(KpiRuleModel).filter(KpiRuleModel.rule_code == rule_code).first()
     
@@ -73,7 +91,7 @@ def get_leaderboard(db: Session = Depends(get_db)):
             total_delta = db.query(func.sum(KpiEventModel.score_delta)).filter(KpiEventModel.user_id == t.user_id).scalar() or 0
             final_kpi = 100 + total_delta
             
-            # ĐỒNG BỘ: Sửa 'DONE' -> 'COMPLETED', 'LATE' -> 'OVERDUE'
+            # ĐỒNG BỘ: Sửa trạng thái đếm 'COMPLETED' và 'OVERDUE' theo thời gian thực cho App Mobile/PC
             done_count = db.query(TaskModel).filter(TaskModel.assigned_to == t.user_id, TaskModel.status == "COMPLETED").count()
             late_count = db.query(TaskModel).filter(TaskModel.assigned_to == t.user_id, TaskModel.status == "OVERDUE").count()
             
