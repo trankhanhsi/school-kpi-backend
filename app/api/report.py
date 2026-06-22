@@ -4,35 +4,33 @@ from sqlalchemy import func
 from datetime import datetime
 from typing import List
 
+# Khớp nối 100% với get_db từ core và hệ thống 17 bảng Models V2 thật
 from app.core.database import get_db
 from app.models.main_models import UserModel, DepartmentModel, KpiEventModel, KpiSummaryMonthlyModel
-from app.api.auth import get_current_user  # Thầy đảm bảo hàm này trả về User đang đăng nhập
+from app.api.auth import get_current_user  # Hàm bảo mật lấy thông tin Token giáo viên đang đăng nhập
 
 router = APIRouter()
 
 # ==============================================================================
-# 📈 API 1: LẤY DỮ LIỆU ĐỘNG CHO BIỂU ĐỒ ĐƯỜNG (KPI CÁC THÁNG CỦA CÁ NHÂN)
+# 📈 1. API ĐỒNG BỘ BIỂU ĐỒ ĐƯỜNG (KPI CÁC THÁNG CỦA CÁ NHÂN GIÁO VIÊN)
 # ==============================================================================
 @router.get("/my-monthly-kpi")
 def get_my_monthly_kpi(current_user: UserModel = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Lấy năm hiện tại để lọc dữ liệu
     current_year = datetime.now().year
     
-    # Truy vấn bảng kpi_summary_monthly để lấy điểm chốt các tháng của giáo viên
+    # 📌 Truy vấn bảng chuẩn kpi_summary_monthly của database_v2
     summaries = db.query(KpiSummaryMonthlyModel).filter(
         KpiSummaryMonthlyModel.user_id == current_user.user_id,
         KpiSummaryMonthlyModel.year == current_year
     ).order_by(KpiSummaryMonthlyModel.month.asc()).all()
     
-    # Nếu chưa có dữ liệu tổng hợp đóng băng cuối tháng, hệ thống tự động tính toán động
-    # theo thời gian thực từ bảng kpi_events (Điểm nền 100 + Tổng delta tích lũy)
     result = []
+    # Nếu hệ thống chưa chạy tiến trình cron-job chốt sổ cuối tháng, tự động tính toán động tích lũy
     if not summaries:
-        # Tạo mảng từ Tháng 1 đến Tháng hiện tại
         current_month = datetime.now().month
         for m in range(1, current_month + 1):
-            # Tính tổng score_delta từ đầu năm đến hết tháng m đó
-            end_of_month = datetime(current_year, m, 28) # Ước lượng cuối tháng
+            end_of_month = datetime(current_year, m, 28)
+            # Điểm thi đua quy chuẩn = 100đ nền + tổng (score_delta) biến động trong tháng
             total_delta = db.query(func.sum(KpiEventModel.score_delta)).filter(
                 KpiEventModel.user_id == current_user.user_id,
                 KpiEventModel.created_at <= end_of_month
@@ -40,20 +38,20 @@ def get_my_monthly_kpi(current_user: UserModel = Depends(get_current_user), db: 
             
             result.append({
                 "month": m,
-                "score": float(100 + total_delta) # Điểm quy chuẩn nền 100
+                "score": float(100 + total_delta)
             })
         return result
 
-    # Nếu đã có dữ liệu đóng băng thì trả về dữ liệu chuẩn
+    # Trả về mảng dữ liệu chuẩn khi đã có dữ liệu đóng băng cuối tháng
     return [{"month": s.month, "score": float(s.total_score)} for s in summaries]
 
 
 # ==============================================================================
-# 📊 API 2: LẤY DỮ LIỆU ĐỘNG CHO BIỂU ĐỒ CỘT (ĐIỂM TRUNG BÌNH THI ĐUA THEO KHỐI)
+# 📊 2. API ĐỒNG BỘ BIỂU ĐỒ CỘT (KPI ĐIỂM TRUNG BÌNH THI ĐUA THEO KHỐI LỚP)
 # ==============================================================================
 @router.get("/departments-kpi")
 def get_departments_kpi(current_user: UserModel = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Lấy danh sách tất cả các khối phòng ban của trường học hiện tại (Multi-School)
+    # 📌 Lấy danh sách Khối lớp từ bảng departments chuẩn dựa theo school_id (Multi-School)
     departments = db.query(DepartmentModel).filter(
         DepartmentModel.school_id == current_user.school_id,
         DepartmentModel.is_active == True
@@ -61,7 +59,7 @@ def get_departments_kpi(current_user: UserModel = Depends(get_current_user), db:
     
     result = []
     for dept in departments:
-        # Lấy danh sách ID giáo viên thuộc khối này
+        # Lấy tất cả user_id của giáo viên thuộc khối chuyên môn này
         teacher_ids = [u.user_id for u in db.query(UserModel).filter(
             UserModel.department_id == dept.department_id,
             UserModel.school_id == current_user.school_id
@@ -71,12 +69,12 @@ def get_departments_kpi(current_user: UserModel = Depends(get_current_user), db:
             result.append({"department_name": dept.department_name, "score": 100.0})
             continue
             
-        # Tính tổng điểm tích lũy của toàn bộ giáo viên trong khối
+        # Tính tổng tất cả điểm thưởng/phạt thi đua của toàn bộ giáo viên trong khối
         total_delta = db.query(func.sum(KpiEventModel.score_delta)).filter(
             KpiEventModel.user_id.in_(teacher_ids)
         ).scalar() or 0
         
-        # Công thức: (Số lượng GV * 100 điểm nền + Tổng biến động điểm) / Số lượng GV
+        # Điểm trung bình khối = (Số GV * 100đ nền + Tổng điểm biến động) / Tổng số GV trong khối
         avg_score = (len(teacher_ids) * 100 + total_delta) / len(teacher_ids)
         
         result.append({
