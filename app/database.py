@@ -1,18 +1,23 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from fastapi import Depends
 from typing import AsyncGenerator
+import os
 
-# Chuỗi kết nối sử dụng asyncpg cho PostgreSQL bất đồng bộ
-DATABASE_URL = "postgresql+asyncpg://postgres:93932406@localhost:5432/school_kpi_v2"
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Khởi tạo Engine Async
+if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgresql://",
+        "postgresql+asyncpg://",
+        1
+    )
+
 engine = create_async_engine(
     DATABASE_URL,
     pool_pre_ping=True,
-    echo=False  # Đổi thành True nếu bạn muốn xem log câu lệnh SQL dưới Terminal
+    echo=False
 )
 
-# Khởi tạo Session Factory tạo phiên làm việc Async
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
@@ -21,7 +26,6 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False
 )
 
-# Hàm Dependency cung cấp Session cho các API (Thay thế cho get_db cũ)
 async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
