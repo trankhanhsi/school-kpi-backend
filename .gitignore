@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+
+.env
+venv/
+env/
+
+.vscode/
+.idea/
+
+web/
+build/
+.dart_tool/
